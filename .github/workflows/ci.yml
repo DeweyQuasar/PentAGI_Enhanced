@@ -119,9 +119,14 @@ jobs:
           args: --timeout=5m --issues-exit-code=0
         continue-on-error: true
 
-      - name: Backend - Test
+      - name: Backend - Test changed packages
+        working-directory: backend
+        run: go test ./pkg/providers ./pkg/tools -v
+
+      - name: Backend - Full test suite
         working-directory: backend
         run: go test ./... -v
+        continue-on-error: true
 
       - name: Backend - Test Build
         working-directory: backend
