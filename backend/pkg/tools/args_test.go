@@ -953,3 +953,58 @@ func TestGetFlowStatusAction_DetailExtraQuoted(t *testing.T) {
 		t.Errorf("Detail = %q, want %q", action.Detail, FlowStatusDetailSummary)
 	}
 }
+
+
+func TestHackResultValidation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		result  HackResult
+		wantErr bool
+	}{
+		{
+			name: "candidate may be unvalidated",
+			result: HackResult{Findings: []PentestFinding{{
+				Title: "scanner signal", Status: FindingStatusCandidate, Target: "https://example.test",
+				Description: "scanner reported a possible issue",
+			}}},
+		},
+		{
+			name: "confirmed requires evidence",
+			result: HackResult{Findings: []PentestFinding{{
+				Title: "SQL injection", Status: FindingStatusConfirmed, Target: "/search?q=",
+				Description: "input affects SQL query", Impact: "data access", Reproduction: "send crafted request",
+			}}},
+			wantErr: true,
+		},
+		{
+			name: "confirmed accepts reproducible evidence",
+			result: HackResult{Findings: []PentestFinding{{
+				Title: "SQL injection", Status: FindingStatusConfirmed, Target: "/search?q=",
+				Description: "input affects SQL query", Impact: "database error and data disclosure",
+				Reproduction: "send the documented request twice and compare the response",
+				Evidence: []FindingEvidence{{
+					Source: "curl", Observation: "crafted input reproducibly changed the server response",
+				}},
+			}}},
+		},
+		{
+			name: "invalid status rejected",
+			result: HackResult{Findings: []PentestFinding{{
+				Title: "mystery", Status: FindingStatus("definitely-bad"), Target: "host",
+				Description: "unsupported state",
+			}}},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.result.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
