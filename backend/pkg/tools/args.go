@@ -290,6 +290,16 @@ type PentestFinding struct {
 }
 
 func (f PentestFinding) Validate() error {
+	if strings.TrimSpace(f.Title) == "" {
+		return fmt.Errorf("finding title is required")
+	}
+	if strings.TrimSpace(f.Target) == "" {
+		return fmt.Errorf("finding %q requires target", f.Title)
+	}
+	if strings.TrimSpace(f.Description) == "" {
+		return fmt.Errorf("finding %q requires description", f.Title)
+	}
+
 	switch f.Status {
 	case FindingStatusCandidate, FindingStatusRejected:
 		return nil
