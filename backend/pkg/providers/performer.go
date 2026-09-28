@@ -299,28 +299,54 @@ func (fp *flowProvider) execToolCall(
 	}))
 
 	if detector.detect(toolCall) {
-		if len(detector.funcCalls) >= RepeatingToolCallThreshold+maxSoftDetectionsBeforeAbort {
-			errMsg := fmt.Sprintf("tool '%s' repeated %d times consecutively, aborting chain", funcName, len(detector.funcCalls))
-			logger.WithField("repeat_count", len(detector.funcCalls)).Error(errMsg)
+		repeatCount := detector.repeatCount()
+		repeatKind := detector.repeatDescription()
+
+		if repeatCount >= RepeatingToolCallThreshold+maxSoftDetectionsBeforeAbort {
+			errMsg := fmt.Sprintf(
+				"tool execution is stuck in a repeated pattern (%s, %d calls); aborting chain",
+				repeatKind, repeatCount,
+			)
+			logger.WithFields(logrus.Fields{
+				"repeat_count": repeatCount,
+				"repeat_kind":  repeatKind,
+			}).Error(errMsg)
 			return "", errors.New(errMsg)
 		}
 
-		response := fmt.Sprintf("tool call '%s' is repeating, please try another tool", funcName)
+		response := fmt.Sprintf(
+			"execution appears stuck in a repeated pattern (%s, %d calls). Do not retry the same approach; change strategy, inputs, or tool.",
+			repeatKind, repeatCount,
+		)
+
+		if detector.shouldInvokeMentor() && executor.IsFunctionExists(tools.AdviceToolName) {
+			mentorResponse, mentorErr := fp.performMentor(
+				ctx, optAgentType, chainID, taskID, subtaskID, chain, executor, toolCall, response,
+			)
+			if mentorErr != nil {
+				logger.WithError(mentorErr).Warn("failed to invoke mentor after repeated execution pattern")
+			} else {
+				monitor.reset()
+				response = formatEnhancedToolResponse(response, mentorResponse)
+			}
+		}
 
 		_, observation := obs.Observer.NewObservation(ctx)
 		observation.Event(
-			langfuse.WithEventName("repeating tool call detected"),
+			langfuse.WithEventName("repeating tool pattern detected"),
 			langfuse.WithEventInput(funcArgs),
 			langfuse.WithEventMetadata(map[string]any{
 				"tool_call_id": toolCall.ID,
 				"tool_name":    funcName,
 				"msg_chain_id": chainID,
+				"repeat_count": repeatCount,
+				"repeat_kind":  repeatKind,
 			}),
 			langfuse.WithEventStatus("failed"),
 			langfuse.WithEventLevel(langfuse.ObservationLevelError),
 			langfuse.WithEventOutput(response),
 		)
-		logger.Warn("failed to exec function: tool call is repeating")
+		logger.Warn("skipping repeated tool pattern")
 
 		return response, nil
 	}

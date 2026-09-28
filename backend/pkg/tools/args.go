@@ -264,9 +264,79 @@ type PentesterAction struct {
 	Message  string `json:"message" jsonschema:"required,title=Pentester action message" jsonschema_description:"Engagement-log entry — a 1-2 short sentence running commentary summarizing the question and the task. Written in the engagement language declared by your system prompt."`
 }
 
+type FindingStatus string
+
+const (
+	FindingStatusCandidate FindingStatus = "candidate"
+	FindingStatusConfirmed FindingStatus = "confirmed"
+	FindingStatusExploited FindingStatus = "exploited"
+	FindingStatusRejected  FindingStatus = "rejected"
+)
+
+type FindingEvidence struct {
+	Source      string `json:"source" jsonschema:"required" jsonschema_description:"Tool or artifact that produced the evidence, for example terminal, browser, nuclei, curl, screenshot, or a saved file."`
+	Observation string `json:"observation" jsonschema:"required" jsonschema_description:"Concrete observed output or behavior supporting the finding. Keep it factual and reproducible; do not include unsupported interpretation."`
+	Artifact    string `json:"artifact,omitempty" jsonschema_description:"Optional artifact path, URL, screenshot reference, request/response capture, or other durable evidence location."`
+}
+
+type PentestFinding struct {
+	Title        string            `json:"title" jsonschema:"required"`
+	Status       FindingStatus     `json:"status" jsonschema:"required,type=string,enum=candidate,enum=confirmed,enum=exploited,enum=rejected" jsonschema_description:"candidate=scanner or heuristic signal not independently validated; confirmed=reproduced with direct evidence; exploited=confirmed and impact demonstrated; rejected=false positive or disproven."`
+	Target       string            `json:"target" jsonschema:"required" jsonschema_description:"In-scope host, URL, endpoint, service, parameter, or component affected."`
+	Description  string            `json:"description" jsonschema:"required"`
+	Impact       string            `json:"impact,omitempty" jsonschema_description:"Observed or defensible security impact. Required for confirmed/exploited findings."`
+	Reproduction string            `json:"reproduction,omitempty" jsonschema_description:"Minimal reproducible steps or request sequence. Required for confirmed/exploited findings."`
+	Evidence     []FindingEvidence `json:"evidence,omitempty" jsonschema_description:"Direct observations supporting this finding. Confirmed/exploited findings require at least one evidence item."`
+}
+
+func (f PentestFinding) Validate() error {
+	if strings.TrimSpace(f.Title) == "" {
+		return fmt.Errorf("finding title is required")
+	}
+	if strings.TrimSpace(f.Target) == "" {
+		return fmt.Errorf("finding %q requires target", f.Title)
+	}
+	if strings.TrimSpace(f.Description) == "" {
+		return fmt.Errorf("finding %q requires description", f.Title)
+	}
+
+	switch f.Status {
+	case FindingStatusCandidate, FindingStatusRejected:
+		return nil
+	case FindingStatusConfirmed, FindingStatusExploited:
+		if strings.TrimSpace(f.Impact) == "" {
+			return fmt.Errorf("finding %q with status %q requires impact", f.Title, f.Status)
+		}
+		if strings.TrimSpace(f.Reproduction) == "" {
+			return fmt.Errorf("finding %q with status %q requires reproduction steps", f.Title, f.Status)
+		}
+		if len(f.Evidence) == 0 {
+			return fmt.Errorf("finding %q with status %q requires direct evidence", f.Title, f.Status)
+		}
+		for i, ev := range f.Evidence {
+			if strings.TrimSpace(ev.Source) == "" || strings.TrimSpace(ev.Observation) == "" {
+				return fmt.Errorf("finding %q evidence %d requires source and observation", f.Title, i)
+			}
+		}
+		return nil
+	default:
+		return fmt.Errorf("finding %q has invalid status %q", f.Title, f.Status)
+	}
+}
+
 type HackResult struct {
-	Result  string `json:"result" jsonschema:"required,title=Hack result description" jsonschema_description:"Technical-channel payload — fully detailed penetration-test report (or error explanation) returned to the calling agent, with usage instructions for the result. Always written in English; never translated."`
-	Message string `json:"message" jsonschema:"required,title=Hack result message" jsonschema_description:"Engagement-log entry — a 1-2 short sentence running commentary with the result and the path to reach the goal. Written in the engagement language declared by your system prompt."`
+	Result   string           `json:"result" jsonschema:"required,title=Hack result description" jsonschema_description:"Technical-channel payload — fully detailed penetration-test report (or error explanation) returned to the calling agent, with usage instructions for the result. Always written in English; never translated."`
+	Findings []PentestFinding `json:"findings,omitempty" jsonschema_description:"Structured findings with explicit validation state. Scanner-only or heuristic hits stay candidate until independently reproduced with direct evidence."`
+	Message  string           `json:"message" jsonschema:"required,title=Hack result message" jsonschema_description:"Engagement-log entry — a 1-2 short sentence running commentary with the result and the path to reach the goal. Written in the engagement language declared by your system prompt."`
+}
+
+func (r HackResult) Validate() error {
+	for i, finding := range r.Findings {
+		if err := finding.Validate(); err != nil {
+			return fmt.Errorf("finding %d: %w", i, err)
+		}
+	}
+	return nil
 }
 
 // FlowStatusDetail controls the level of detail returned by get_flow_status.

@@ -1273,3 +1273,86 @@ func TestWrapToolCallIDTemplateError(t *testing.T) {
 		})
 	}
 }
+
+
+func TestRepeatingDetectorDetectsShortCycles(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		calls []llms.ToolCall
+	}{
+		{
+			name: "two-call cycle",
+			calls: []llms.ToolCall{
+				makeToolCall("scan", `{"target":"a"}`),
+				makeToolCall("probe", `{"target":"a"}`),
+				makeToolCall("scan", `{"target":"a"}`),
+				makeToolCall("probe", `{"target":"a"}`),
+				makeToolCall("scan", `{"target":"a"}`),
+				makeToolCall("probe", `{"target":"a"}`),
+			},
+		},
+		{
+			name: "three-call cycle",
+			calls: []llms.ToolCall{
+				makeToolCall("scan", `{"target":"a"}`),
+				makeToolCall("probe", `{"target":"a"}`),
+				makeToolCall("search", `{"query":"a"}`),
+				makeToolCall("scan", `{"target":"a"}`),
+				makeToolCall("probe", `{"target":"a"}`),
+				makeToolCall("search", `{"query":"a"}`),
+				makeToolCall("scan", `{"target":"a"}`),
+				makeToolCall("probe", `{"target":"a"}`),
+				makeToolCall("search", `{"query":"a"}`),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			detector := &repeatingDetector{}
+			for i, call := range tt.calls {
+				detected := detector.detect(call)
+				if i < len(tt.calls)-1 && detected {
+					t.Fatalf("cycle detected too early at call %d", i+1)
+				}
+			}
+			if detector.repeatCount() < RepeatingToolCallThreshold {
+				t.Fatalf("expected repeated cycle count >= %d, got %d", RepeatingToolCallThreshold, detector.repeatCount())
+			}
+			if detector.repeatDescription() == "identical tool call" {
+				t.Fatal("expected cycle description")
+			}
+		})
+	}
+}
+
+func TestRepeatingDetectorCycleBreakResetsMentorSuggestion(t *testing.T) {
+	detector := &repeatingDetector{}
+	cycle := []llms.ToolCall{
+		makeToolCall("scan", `{"target":"a"}`),
+		makeToolCall("probe", `{"target":"a"}`),
+		makeToolCall("scan", `{"target":"a"}`),
+		makeToolCall("probe", `{"target":"a"}`),
+		makeToolCall("scan", `{"target":"a"}`),
+		makeToolCall("probe", `{"target":"a"}`),
+	}
+	for _, call := range cycle {
+		detector.detect(call)
+	}
+
+	if !detector.shouldInvokeMentor() {
+		t.Fatal("expected first detected cycle to request mentor")
+	}
+	if detector.shouldInvokeMentor() {
+		t.Fatal("mentor should only be requested once for the same cycle")
+	}
+
+	if detector.detect(makeToolCall("different", `{"target":"b"}`)) {
+		t.Fatal("different strategy should break the detected cycle")
+	}
+	if detector.mentorSuggested {
+		t.Fatal("mentor suggestion state should reset after cycle break")
+	}
+}

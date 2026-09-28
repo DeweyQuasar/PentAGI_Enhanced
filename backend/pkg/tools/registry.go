@@ -389,9 +389,10 @@ var registryDefinitions = map[string]llms.FunctionDefinition{
 		Parameters:  reflector.Reflect(&PentesterAction{}),
 	},
 	HackResultToolName: {
-		Name:        HackResultToolName,
-		Description: "Send the penetration test result to the user with detailed report",
-		Parameters:  reflector.Reflect(&HackResult{}),
+		Name: HackResultToolName,
+		Description: "Send the penetration test result with a detailed report and structured evidence-state findings. " +
+			"Scanner or heuristic signals must remain candidate until independently reproduced; confirmed/exploited findings require direct evidence, impact, and reproduction steps.",
+		Parameters: reflector.Reflect(&HackResult{}),
 	},
 	AdviceToolName: {
 		Name:        AdviceToolName,

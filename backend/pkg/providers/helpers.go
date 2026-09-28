@@ -86,8 +86,24 @@ func markReflectorRetry(ctx context.Context) context.Context {
 	return context.WithValue(ctx, reflectorRetryContextKey{}, true)
 }
 
+const (
+	repeatingCycleMinLength = 2
+	repeatingCycleMaxLength = 3
+	repeatingCycleThreshold = 3
+	repeatingHistoryLimit   = repeatingCycleMaxLength * repeatingCycleThreshold * 2
+)
+
 type repeatingDetector struct {
+	// funcCalls intentionally preserves the legacy consecutive-identical-call
+	// streak. Some callers/tests use its length for diagnostics.
 	funcCalls []llms.FunctionCall
+
+	// history and cycle state catch short loops such as A-B-A-B-A-B and
+	// A-B-C-A-B-C-A-B-C, which the old consecutive-only detector missed.
+	history        []llms.FunctionCall
+	cyclePattern   []llms.FunctionCall
+	cycleCallCount int
+	mentorSuggested bool
 }
 
 func (rd *repeatingDetector) detect(toolCall llms.ToolCall) bool {
@@ -95,22 +111,104 @@ func (rd *repeatingDetector) detect(toolCall llms.ToolCall) bool {
 		return false
 	}
 
+	wasRepeating := rd.repeatCount() >= RepeatingToolCallThreshold
 	funcCall := rd.clearCallArguments(toolCall.FunctionCall)
 
-	if len(rd.funcCalls) == 0 {
+	if len(rd.funcCalls) == 0 || sameFunctionCall(rd.funcCalls[len(rd.funcCalls)-1], funcCall) {
 		rd.funcCalls = append(rd.funcCalls, funcCall)
-		return false
-	}
-
-	lastToolCall := rd.funcCalls[len(rd.funcCalls)-1]
-	if lastToolCall.Name != funcCall.Name || lastToolCall.Arguments != funcCall.Arguments {
+	} else {
 		rd.funcCalls = []llms.FunctionCall{funcCall}
-		return false
 	}
 
-	rd.funcCalls = append(rd.funcCalls, funcCall)
+	rd.appendHistory(funcCall)
 
-	return len(rd.funcCalls) >= RepeatingToolCallThreshold
+	// Preserve the existing exact-repeat behavior and escalation count.
+	if len(rd.funcCalls) >= RepeatingToolCallThreshold {
+		rd.cyclePattern = nil
+		rd.cycleCallCount = 0
+		return true
+	}
+
+	// Once a short cycle has been detected, continue tracking it call by call
+	// until the sequence breaks.
+	if len(rd.cyclePattern) > 0 {
+		expected := rd.cyclePattern[rd.cycleCallCount%len(rd.cyclePattern)]
+		if sameFunctionCall(expected, funcCall) {
+			rd.cycleCallCount++
+			return true
+		}
+
+		rd.cyclePattern = nil
+		rd.cycleCallCount = 0
+	}
+
+	if pattern := detectRepeatedCycle(rd.history); len(pattern) > 0 {
+		rd.cyclePattern = pattern
+		rd.cycleCallCount = len(pattern) * repeatingCycleThreshold
+		return true
+	}
+
+	if wasRepeating {
+		rd.mentorSuggested = false
+	}
+
+	return false
+}
+
+func (rd *repeatingDetector) appendHistory(funcCall llms.FunctionCall) {
+	rd.history = append(rd.history, funcCall)
+	if len(rd.history) > repeatingHistoryLimit {
+		rd.history = append([]llms.FunctionCall(nil), rd.history[len(rd.history)-repeatingHistoryLimit:]...)
+	}
+}
+
+func detectRepeatedCycle(history []llms.FunctionCall) []llms.FunctionCall {
+	for cycleLen := repeatingCycleMinLength; cycleLen <= repeatingCycleMaxLength; cycleLen++ {
+		required := cycleLen * repeatingCycleThreshold
+		if len(history) < required {
+			continue
+		}
+
+		suffix := history[len(history)-required:]
+		matches := true
+		for i := cycleLen; i < len(suffix); i++ {
+			if !sameFunctionCall(suffix[i], suffix[i%cycleLen]) {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			return append([]llms.FunctionCall(nil), suffix[:cycleLen]...)
+		}
+	}
+
+	return nil
+}
+
+func sameFunctionCall(a, b llms.FunctionCall) bool {
+	return a.Name == b.Name && a.Arguments == b.Arguments
+}
+
+func (rd *repeatingDetector) repeatCount() int {
+	if rd.cycleCallCount > len(rd.funcCalls) {
+		return rd.cycleCallCount
+	}
+	return len(rd.funcCalls)
+}
+
+func (rd *repeatingDetector) repeatDescription() string {
+	if len(rd.cyclePattern) > 0 {
+		return fmt.Sprintf("%d-call cycle", len(rd.cyclePattern))
+	}
+	return "identical tool call"
+}
+
+func (rd *repeatingDetector) shouldInvokeMentor() bool {
+	if rd.repeatCount() < RepeatingToolCallThreshold || rd.mentorSuggested {
+		return false
+	}
+	rd.mentorSuggested = true
+	return true
 }
 
 func (rd *repeatingDetector) clearCallArguments(toolCall *llms.FunctionCall) llms.FunctionCall {

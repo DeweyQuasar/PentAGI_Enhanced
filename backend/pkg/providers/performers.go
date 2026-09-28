@@ -642,6 +642,9 @@ func (fp *flowProvider) performPentester(
 			if err != nil {
 				return "", fmt.Errorf("failed to unmarshal result: %w", err)
 			}
+			if err := hackResult.Validate(); err != nil {
+				return "", fmt.Errorf("invalid hack result: %w", err)
+			}
 			return "hack result successfully processed", nil
 		},
 		Summarizer: fp.GetSummarizeResultHandler(taskID, subtaskID),

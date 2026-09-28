@@ -1,0 +1,111 @@
+# Cost-tiered OpenAI-compatible router configuration
+#
+# Point the Custom provider at an OpenAI-compatible gateway (for example LiteLLM)
+# that exposes these model aliases:
+#   routine            -> cheapest/local model with reliable tool calling
+#   reasoning          -> stronger but still low-cost model
+#   premium-escalation -> highest-quality model reserved for difficult decisions
+#
+# The important policy is the role split, not the alias names. Keep the premium
+# alias off routine execution roles so normal reconnaissance, search, formatting,
+# installation, and coding do not silently consume premium-model budget.
+#
+# A future core router can make escalation dynamic across providers. Until then,
+# this configuration turns the existing per-agent model selection into a useful
+# cost boundary: Adviser is the explicit high-quality escalation path, while
+# execution stays on routine/reasoning models.
+
+simple:
+  model: "routine"
+  temperature: 0.2
+  top_p: 0.9
+  n: 1
+  max_tokens: 4096
+
+simple_json:
+  model: "routine"
+  temperature: 0.1
+  top_p: 0.8
+  n: 1
+  max_tokens: 4096
+  json: true
+
+primary_agent:
+  model: "reasoning"
+  temperature: 0.2
+  top_p: 0.9
+  n: 1
+  max_tokens: 8192
+
+assistant:
+  model: "reasoning"
+  temperature: 0.2
+  top_p: 0.9
+  n: 1
+  max_tokens: 8192
+
+generator:
+  model: "reasoning"
+  temperature: 0.2
+  top_p: 0.9
+  n: 1
+  max_tokens: 8192
+
+refiner:
+  model: "reasoning"
+  temperature: 0.1
+  top_p: 0.8
+  n: 1
+  max_tokens: 6144
+
+# Reserve the premium model for planning recovery, difficult attack-path
+# decisions, and stall intervention. performMentor/performPlanner both use the
+# Adviser path, making this the natural escalation boundary.
+adviser:
+  model: "premium-escalation"
+  temperature: 0.1
+  top_p: 0.9
+  n: 1
+  max_tokens: 8192
+
+reflector:
+  model: "routine"
+  temperature: 0.1
+  top_p: 0.8
+  n: 1
+  max_tokens: 4096
+
+searcher:
+  model: "routine"
+  temperature: 0.2
+  top_p: 0.9
+  n: 1
+  max_tokens: 6144
+
+enricher:
+  model: "routine"
+  temperature: 0.2
+  top_p: 0.9
+  n: 1
+  max_tokens: 6144
+
+coder:
+  model: "reasoning"
+  temperature: 0.1
+  top_p: 0.8
+  n: 1
+  max_tokens: 8192
+
+installer:
+  model: "routine"
+  temperature: 0.1
+  top_p: 0.8
+  n: 1
+  max_tokens: 6144
+
+pentester:
+  model: "reasoning"
+  temperature: 0.1
+  top_p: 0.85
+  n: 1
+  max_tokens: 8192
